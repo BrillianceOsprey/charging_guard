@@ -8,10 +8,10 @@ const _channel = MethodChannel('charge_guard/root');
 
 Future<bool> _isRoot() async =>
     (await _channel.invokeMethod<bool>('isRoot')) ?? false;
-Future<String> _probeRoot() async =>
-    (await _channel.invokeMethod<String>('probeRoot')) ?? 'no output';
 Future<String> _run(String cmd) async =>
     (await _channel.invokeMethod<String>('runShell', {'cmd': cmd})) ?? '';
+Future<String> _probeRoot() async =>
+    (await _channel.invokeMethod<String>('probeRoot')) ?? 'no output';
 Future<String> _readNode(String path) async =>
     (await _channel.invokeMethod<String>('readNode', {'path': path})) ?? '';
 Future<bool> _writeNode(String path, String value) async =>
@@ -32,6 +32,7 @@ void main() {
 
 class ChargeGuardApp extends StatelessWidget {
   const ChargeGuardApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -55,8 +56,8 @@ class _HomePageState extends State<HomePage> {
   bool _charging = false;
 
   bool _svcEnabled = false;
-  int _cap = 80;
-  int _hyst = 5;
+  int _cap = 80; // Charging cap
+  int _hyst = 5; // Hysteresis
   final _nodeCtrl = TextEditingController();
   String _logs = '';
   bool _root = false;
@@ -116,7 +117,7 @@ class _HomePageState extends State<HomePage> {
 
   void _log(String s) => setState(() {
     _logs = '${DateTime.now()}: $s\n$_logs';
-    print("Re-check root (verbose) => $_logs");
+    print("Log: $_logs");
   });
 
   Future<void> _toggleService(bool on) async {
@@ -129,33 +130,16 @@ class _HomePageState extends State<HomePage> {
     if (on) {
       await _startService(_cap, _hyst, _nodeCtrl.text);
       _log('Service started.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Charging service started!')),
+      );
     } else {
       await _stopService();
       _log('Service stopped.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Charging service stopped.')),
+      );
     }
-  }
-
-  Future<void> _probeCommonNodes() async {
-    const nodes = [
-      "/sys/class/power_supply/battery/charging_enabled",
-      "/sys/class/power_supply/battery/store_mode",
-      "/sys/class/power_supply/battery/batt_slate_mode",
-      "/sys/class/power_supply/battery/input_suspend",
-    ];
-    final found = <String>[];
-    for (final n in nodes) {
-      final out = await _readNode(n);
-      if (out.isNotEmpty &&
-          !out.contains("ERROR") &&
-          !out.contains("No such file")) {
-        found.add("$n => ${out.trim().split('\n').first}");
-      }
-    }
-    _log(
-      found.isEmpty
-          ? "No common nodes readable. Use a custom path."
-          : "Detected:\n${found.join('\n')}",
-    );
   }
 
   Future<void> _quickEnable(bool enable) async {
@@ -171,23 +155,18 @@ class _HomePageState extends State<HomePage> {
     final value = inverted ? (enable ? "0" : "1") : (enable ? "1" : "0");
     final ok = await _writeNode(base, value);
     _log(ok ? "Charging ${enable ? "ENABLED" : "DISABLED"}" : "Write failed.");
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Charging ${enable ? "enabled" : "disabled"}!')),
+      );
+    }
   }
 
   Future<void> _verboseRootCheck() async {
     final report = await _probeRoot();
     _log("Root probe report:\n$report");
-    // After probe, our simple check may become true if Magisk prompt just appeared
     final now = await _isRoot();
     setState(() => _root = now);
-  }
-
-  Future<void> _requestRootAccess() async {
-    try {
-      final result = await _channel.invokeMethod('runShell', {'cmd': 'id'});
-      _log('Root access granted: $result');
-    } catch (e) {
-      _log('Error requesting root: $e');
-    }
   }
 
   @override
@@ -210,15 +189,9 @@ class _HomePageState extends State<HomePage> {
               const Spacer(),
               Chip(
                 label: InkWell(
-                  onTap: _requestRootAccess,
-                  child: Text(_root ? "root" : "no rdddoot"),
+                  onTap: _verboseRootCheck,
+                  child: Text(_root ? "root" : "no root"),
                 ),
-                backgroundColor: _root
-                    ? Colors.green.shade100
-                    : Colors.red.shade100,
-              ),
-              Chip(
-                label: Text(_root ? "root" : "no root"),
                 backgroundColor: _root
                     ? Colors.green.shade100
                     : Colors.red.shade100,
@@ -257,11 +230,6 @@ class _HomePageState extends State<HomePage> {
             spacing: 8,
             children: [
               ElevatedButton.icon(
-                onPressed: _probeCommonNodes,
-                icon: const Icon(Icons.search),
-                label: const Text('Probe common nodes'),
-              ),
-              ElevatedButton.icon(
                 onPressed: () => _quickEnable(true),
                 icon: const Icon(Icons.play_arrow),
                 label: const Text('Enable charge'),
@@ -296,8 +264,8 @@ class _HomePageState extends State<HomePage> {
               Expanded(
                 child: Slider(
                   min: 2,
-                  max: 20,
-                  divisions: 18,
+                  max: 100,
+                  divisions: 98, // 100 - 2 = 98 steps
                   label: '$_hyst%',
                   value: _hyst.toDouble(),
                   onChanged: (v) => setState(() => _hyst = v.round()),
